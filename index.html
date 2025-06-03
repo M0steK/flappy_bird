@@ -5,23 +5,24 @@
     <link rel="icon" href="ptak.png" type="image/x-icon" />
     <style>
       @import url("https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap");
-
       body {
         margin: 0;
         overflow: hidden;
-        display: flex;
-        justify-content: center;
-        align-items: center;
         height: 100vh;
         background: linear-gradient(to bottom, #89f7fe, #66a6ff);
         font-family: "Press Start 2P", cursive;
+        position: relative;
       }
-
+      #container {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+      }
       canvas {
         border: 4px solid #000;
         box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
       }
-
       #game-over {
         position: absolute;
         color: white;
@@ -30,67 +31,150 @@
         text-align: center;
         display: none;
         line-height: 1.5;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 10;
+        width: 100%;
       }
-
       #score,
-      #high-score {
+      #high-score,
+      #lives {
         position: absolute;
         color: white;
         font-size: 20px;
         text-shadow: 3px 3px 0 #000;
       }
-
       #score {
         top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
         text-align: center;
       }
-
       #high-score {
         top: 20px;
         left: 20px;
+      }
+      #lives {
+        top: 20px;
+        right: 20px;
+      }
+      #leaderboard {
+        position: absolute;
+        top: 50%;
+        left: calc(50% + 350px);
+        transform: translateY(-50%);
+        background: rgba(0, 0, 0, 0.6);
+        color: white;
+        padding: 20px;
+        border-radius: 16px;
+        font-size: 14px;
+        text-align: left;
+        box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+      }
+      #leaderboard h2 {
+        margin-bottom: 10px;
+        font-size: 16px;
+      }
+      #leaderboard ol {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      #leaderboard li {
+        margin: 6px 0;
       }
     </style>
   </head>
   <body>
     <div id="score">0</div>
     <div id="high-score">BEST: 0</div>
+    <div id="lives">LIVES: 0</div>
     <div id="game-over">
       GAME OVER<br />
       SCORE: <span id="final-score">0</span><br />
       CLICK TO RESTART
     </div>
-    <canvas id="game" width="400" height="600"></canvas>
 
+    <div id="wrapper">
+      <div id="container">
+        <canvas id="game" width="400" height="600"></canvas>
+      </div>
+      <div id="leaderboard">
+        <h2>TOP SCORES</h2>
+        <ol id="score-list"></ol>
+      </div>
+    </div>
+
+    <!-- AUDIO -->
     <audio id="jump-sound" src="skok.mp3" preload="auto"></audio>
     <audio id="gameover-sound" src="koniec.mp3" preload="auto"></audio>
     <audio id="bg-music" src="music.mp3" preload="auto" loop></audio>
     <audio id="point-sound" src="punkt.mp3" preload="auto"></audio>
+    <audio id="coin-sound" src="coin.mp3" preload="auto"></audio>
+    <audio id="heart-sound" src="heart.mp3" preload="auto"></audio>
 
     <script>
+      const scoreList = document.getElementById("score-list");
+
+      function loadLeaderboard() {
+        const scores =
+          JSON.parse(localStorage.getItem("flappyLeaderboard")) || [];
+        scoreList.innerHTML = "";
+        scores.slice(0, 5).forEach((entry, index) => {
+          const li = document.createElement("li");
+          li.textContent = `${index + 1}. ${entry.name} - ${entry.score}`;
+          scoreList.appendChild(li);
+        });
+      }
+
+      function updateLeaderboard(finalScore) {
+        gameoverSound.play();
+        let name = prompt("Podaj swoje imię:");
+        if (!name) name = "Anonim";
+
+        const scores =
+          JSON.parse(localStorage.getItem("flappyLeaderboard")) || [];
+        scores.push({ name, score: finalScore });
+
+        scores.sort((a, b) => b.score - a.score);
+        const top5 = scores.slice(0, 5);
+
+        localStorage.setItem("flappyLeaderboard", JSON.stringify(top5));
+        loadLeaderboard();
+      }
+
+      loadLeaderboard();
       const canvas = document.getElementById("game");
       const ctx = canvas.getContext("2d");
-
       const scoreElement = document.getElementById("score");
       const gameOverElement = document.getElementById("game-over");
       const finalScoreElement = document.getElementById("final-score");
       const highScoreElement = document.getElementById("high-score");
+      const livesElement = document.getElementById("lives");
 
       const jumpSound = document.getElementById("jump-sound");
       const gameoverSound = document.getElementById("gameover-sound");
       const bgMusic = document.getElementById("bg-music");
       const pointSound = document.getElementById("point-sound");
+      const coinSound = document.getElementById("coin-sound");
+      const heartSound = document.getElementById("heart-sound");
 
       const images = {
         bird: new Image(),
         pipeTop: new Image(),
         pipeBottom: new Image(),
         background: new Image(),
+        heart: new Image(),
+        coin: new Image(),
       };
 
       images.bird.src = "ptak.png";
       images.pipeTop.src = "rura1.png";
       images.pipeBottom.src = "rura.png";
       images.background.src = "background1.jpg";
+      images.heart.src = "heart.png";
+      images.coin.src = "coin.png";
 
       const bird = {
         x: 100,
@@ -101,9 +185,14 @@
         gravity: 0.15,
         jump: -5,
         rotation: 0,
+        blinking: false,
+        blinkTimer: 0,
       };
 
       const pipes = [];
+      const hearts = [];
+      const coins = [];
+
       const pipeWidth = 60;
       const pipeGap = 150;
       const pipeSpeed = 2;
@@ -111,6 +200,7 @@
       const pipeInterval = 1800;
 
       let score = 0;
+      let lives = 0;
       let highScore = localStorage.getItem("flappyHighScore") || 0;
       highScoreElement.textContent = "BEST: " + highScore;
 
@@ -119,7 +209,6 @@
       let imagesLoaded = 0;
       let gameOverCooldown = 0;
 
-      // Scrolling background
       let backgroundX = 0;
       const backgroundScrollSpeed = 1;
 
@@ -134,6 +223,8 @@
       });
 
       function drawBird() {
+        if (bird.blinking && Math.floor(bird.blinkTimer / 100) % 2 === 0)
+          return;
         ctx.save();
         ctx.translate(bird.x + bird.width / 2, bird.y + bird.height / 2);
         ctx.rotate((bird.rotation * Math.PI) / 180);
@@ -166,6 +257,11 @@
         });
       }
 
+      function drawItems() {
+        hearts.forEach((h) => ctx.drawImage(images.heart, h.x, h.y, 30, 30));
+        coins.forEach((c) => ctx.drawImage(images.coin, c.x, c.y, 25, 25));
+      }
+
       function drawBackground() {
         const bg = images.background;
         const scale = canvas.height / bg.height;
@@ -176,14 +272,21 @@
 
       function update(deltaTime) {
         if (!gameRunning) return;
+        //bgMusic.play();
+        if (bird.blinking) {
+          bird.blinkTimer += deltaTime;
+          if (bird.blinkTimer > 1000) {
+            bird.blinking = false;
+            bird.blinkTimer = 0;
+          }
+        }
 
         backgroundX -= backgroundScrollSpeed;
         if (
           backgroundX <=
           -images.background.width * (canvas.height / images.background.height)
-        ) {
+        )
           backgroundX = 0;
-        }
 
         bird.velocity += bird.gravity;
         bird.y += bird.velocity;
@@ -193,7 +296,6 @@
           bird.y = canvas.height - bird.height;
           gameOver();
         }
-
         if (bird.y < 0) {
           bird.y = 0;
           bird.velocity = 0;
@@ -212,13 +314,11 @@
             const maxOffset = 60;
             const offsetSpeed = 0.4;
             pipes[i].verticalOffset += offsetSpeed * pipes[i].direction;
-
             if (
               pipes[i].verticalOffset > maxOffset ||
               pipes[i].verticalOffset < -maxOffset
-            ) {
+            )
               pipes[i].direction *= -1;
-            }
 
             pipes[i].top += offsetSpeed * pipes[i].direction;
             pipes[i].bottom = pipes[i].top + pipeGap;
@@ -231,7 +331,14 @@
             (bird.y + padding < pipes[i].top ||
               bird.y + bird.height - padding > pipes[i].bottom)
           ) {
-            gameOver();
+            if (!bird.blinking && lives > 0) {
+              lives--;
+              livesElement.textContent = "LIVES: " + lives;
+              bird.blinking = true;
+              bird.blinkTimer = 0;
+            } else if (!bird.blinking && lives === 0) {
+              gameOver();
+            }
           }
 
           if (!pipes[i].passed && bird.x > pipes[i].x + pipeWidth) {
@@ -242,8 +349,34 @@
             pointSound.play();
           }
 
-          if (pipes[i].x + pipeWidth < 0) {
-            pipes.splice(i, 1);
+          if (pipes[i].x + pipeWidth < 0) pipes.splice(i, 1);
+        }
+
+        updateItems(hearts, 30, (item) => {
+          lives++;
+          livesElement.textContent = "LIVES: " + lives;
+          heartSound.play();
+        });
+        updateItems(coins, 25, (item) => {
+          score += 3;
+          scoreElement.textContent = score;
+          heartSound.play();
+        });
+      }
+
+      function updateItems(items, size, onCollect) {
+        for (let i = items.length - 1; i >= 0; i--) {
+          items[i].x -= pipeSpeed;
+          if (
+            bird.x < items[i].x + size &&
+            bird.x + bird.width > items[i].x &&
+            bird.y < items[i].y + size &&
+            bird.y + bird.height > items[i].y
+          ) {
+            onCollect(items[i]);
+            items.splice(i, 1);
+          } else if (items[i].x + size < 0) {
+            items.splice(i, 1);
           }
         }
       }
@@ -252,7 +385,6 @@
         const minTop = 100;
         const maxTop = canvas.height - pipeGap - 100;
         const top = Math.random() * (maxTop - minTop) + minTop;
-
         pipes.push({
           x: canvas.width,
           top: top,
@@ -261,6 +393,21 @@
           verticalOffset: 0,
           direction: Math.random() < 0.5 ? -1 : 1,
         });
+
+        if (Math.random() < 0.3) {
+          coins.push({
+            x: canvas.width + (pipeInterval / 2 / (300 / 60)) * pipeSpeed,
+            y: Math.random() * (canvas.height - 100) + 50,
+          });
+        }
+        if (lives >= 0 && lives < 4) {
+          if (Math.random() < 0.2) {
+            hearts.push({
+              x: canvas.width + (pipeInterval / 2 / (300 / 60)) * pipeSpeed,
+              y: Math.random() * (canvas.height - 100) + 50,
+            });
+          }
+        }
       }
 
       function gameOver() {
@@ -275,16 +422,24 @@
           localStorage.setItem("flappyHighScore", highScore);
           highScoreElement.textContent = "BEST: " + highScore;
         }
+
+        updateLeaderboard(score);
       }
 
       function resetGame() {
         bird.y = canvas.height / 2;
         bird.velocity = 0;
         bird.rotation = 0;
+        bird.blinking = false;
+        bird.blinkTimer = 0;
         pipes.length = 0;
+        coins.length = 0;
+        hearts.length = 0;
         score = 0;
+        lives = 0;
         pipeTimer = 0;
         scoreElement.textContent = "0";
+        livesElement.textContent = "LIVES: 0";
         gameRunning = true;
         gameOverElement.style.display = "none";
       }
@@ -299,6 +454,7 @@
         drawBackground();
         update(deltaTime);
         drawPipes();
+        drawItems();
         drawBird();
 
         requestAnimationFrame(gameLoop);
